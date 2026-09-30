@@ -1,83 +1,116 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from openai import OpenAI, APIError
+
+from app.config import get_settings
 from app.models import Feedback, InterviewType, Role
+
+settings = get_settings()
+client = OpenAI(api_key=settings.openai_api_key)
 
 
 class InterviewEvaluationService:
-    """Evaluates interview answers using a simple heuristic model.
-
-    For the MVP this is intentionally lightweight and deterministic so the product can be
-    developed and tested on a Windows PC without external dependencies.
+    """Evaluates interview answers using OpenAI GPT.
+    
+    For the MVP, this uses GPT-4o-mini for cost-effectiveness.
+    For production, you could switch to GPT-4 or GPT-4 Turbo.
     """
 
     @staticmethod
     def evaluate(payload: Any) -> Feedback:
         transcript = (getattr(payload, "transcript", "") or "").strip()
-        word_count = len(transcript.split())
+        role = getattr(payload, "role", "software_engineer")
+        interview_type = getattr(payload, "interview_type", "behavioral")
+        question_id = getattr(payload, "question_id", "")
 
-        if word_count < 20:
-            score = 45
-            strengths = ["The answer was clear and directly addressed the question."]
-            improvements = [
-                "Add concrete examples with specific details and outcomes.",
-                "Describe the impact or result of your actions.",
-            ]
-            missing_information = [
-                "Specific metrics or measurable outcomes.",
-                "Context about the challenge or decision.",
-            ]
-            follow_up = "Can you walk through a specific example step-by-step?"
+        if not transcript:
+            return InterviewEvaluationService._fallback_feedback()
 
-        elif word_count < 50:
-            score = 70
-            strengths = [
-                "Good use of structure and relevant examples.",
-                "Answer showed awareness of the problem.",
-            ]
-            improvements = [
-                "Add more detail on trade-offs or alternatives you considered.",
-                "Emphasize the measurable impact of your decision.",
-            ]
-            missing_information = [
-                "Specific metrics, KPIs, or business impact.",
-                "How you prioritized between competing concerns.",
-            ]
-            follow_up = "What was the measurable outcome or impact of your decision?"
+        try:
+            response = client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert interview coach evaluating candidate responses. Return a JSON object with: score (0-100), strengths (list), improvements (list), missing_information (list), follow_up_question (string).",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Role: {role}\nInterview Type: {interview_type}\nCandidate Answer: {transcript}",
+                    },
+                ],
+                temperature=0.7,
+            )
 
-        else:
-            score = 88
-            strengths = [
-                "Strong structure with clear examples and outcomes.",
-                "Demonstrated thoughtful decision-making and ownership.",
-                "Good use of specific metrics and results.",
-            ]
-            improvements = [
-                "Consider discussing a challenging trade-off in more detail.",
-                "Add more about stakeholder alignment or communication.",
-            ]
-            missing_information = [
-                "What you would do differently if you faced it again.",
-                "How this experience shaped your approach to similar problems.",
-            ]
-            follow_up = "If you faced this situation again, what would you do differently?"
+            result = response.choices[0].message.content
+            feedback_dict = json.loads(result)
 
+            return Feedback(
+                score=int(feedback_dict.get("score", 70)),
+                strengths=feedback_dict.get("strengths", []),
+                improvements=feedback_dict.get("improvements", []),
+                missing_information=feedback_dict.get("missing_information", []),
+                follow_up_question=feedback_dict.get("follow_up_question", "Tell me more about that."),
+            )
+        except (APIError, json.JSONDecodeError, KeyError) as e:
+            print(f"Error evaluating with OpenAI: {e}")
+            return InterviewEvaluationService._fallback_feedback()
+
+    @staticmethod
+    def _fallback_feedback() -> Feedback:
+        """Fallback evaluation when OpenAI is unavailable."""
         return Feedback(
-            score=score,
-            strengths=strengths,
-            improvements=improvements,
-            missing_information=missing_information,
-            follow_up_question=follow_up,
+            score=70,
+            strengths=["The answer was clear and addressed the question."],
+            improvements=["Add more concrete examples and measurable outcomes."],
+            missing_information=["Specific metrics or business impact."],
+            follow_up_question="Can you walk through a specific example in more detail?",
         )
 
 
 class TranscriptService:
-    """Speech-to-text stub for the MVP."""
+    """Convert audio to text using OpenAI Whisper API.
+    
+    Usage:
+        transcript = TranscriptService.transcribe_file('recording.mp3')
+    """
 
     @staticmethod
-    def transcribe(audio_data: bytes) -> str:
-        return "This is a simulated transcript."
+    def transcribe_file(file_path: str) -> str:
+        """Transcribe an audio file using Whisper."""
+        try:
+            with open(file_path, "rb") as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model=settings.whisper_model,
+                    file=audio_file,
+                )
+            return transcript.text
+        except FileNotFoundError:
+            print(f"Audio file not found: {file_path}")
+            return "[Audio file not found]"
+        except APIError as e:
+            print(f"Whisper API error: {e}")
+            return "[Transcription failed]"
+
+    @staticmethod
+    def transcribe_bytes(audio_bytes: bytes, file_format: str = "mp3") -> str:
+        """Transcribe audio from bytes."""
+        try:
+            import io
+            audio_stream = io.BytesIO(audio_bytes)
+            audio_stream.name = f"audio.{file_format}"
+            
+            transcript = client.audio.transcriptions.create(
+                model=settings.whisper_model,
+                file=audio_stream,
+            )
+            return transcript.text
+        except APIError as e:
+            print(f"Whisper API error: {e}")
+            return "[Transcription failed]"
 
 
 class ReportService:

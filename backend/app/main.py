@@ -5,9 +5,12 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import get_settings
 from app.models import QUESTION_BANK
 from app.schemas import EvaluateRequest, EvaluateResponse, InterviewReportResponse, QuestionResponse
-from app.services import InterviewEvaluationService, ReportService
+from app.services import InterviewEvaluationService, ReportService, TranscriptService
+
+settings = get_settings()
 
 app = FastAPI(
     title="InterviewVR AI API",
@@ -25,7 +28,7 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "interviewvr-ai-api"}
+    return {"status": "ok", "service": "interviewvr-ai-api", "env": settings.app_env}
 
 
 @app.get("/api/interview/questions", response_model=list[QuestionResponse])
@@ -93,6 +96,20 @@ def generate_report(payload: dict[str, Any]) -> InterviewReportResponse:
 
 
 @app.post("/api/interview/transcribe")
-def transcribe_stub(payload: dict[str, Any]) -> dict[str, str]:
-    text = payload.get("text") or payload.get("transcript") or "Simulated transcript generated for this MVP."
-    return {"transcript": str(text)}
+def transcribe_audio(payload: dict[str, Any]) -> dict[str, str]:
+    """Transcribe audio using OpenAI Whisper.
+    
+    Accepts either:
+    - text: Direct text input (for testing)
+    - file_path: Path to audio file on disk
+    """
+    text = payload.get("text")
+    file_path = payload.get("file_path")
+
+    if text:
+        return {"transcript": str(text)}
+    if file_path:
+        transcript = TranscriptService.transcribe_file(file_path)
+        return {"transcript": transcript}
+
+    return {"transcript": ""}

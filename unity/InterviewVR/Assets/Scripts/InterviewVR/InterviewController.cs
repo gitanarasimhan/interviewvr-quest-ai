@@ -20,11 +20,14 @@ namespace InterviewVR
         [SerializeField] private List<int> scores = new List<int>();
 
         public bool IsReady { get; private set; }
+        public bool IsProcessing { get; private set; }
         public QuestionData CurrentQuestion => currentQuestionIndex < questions.Count ? questions[currentQuestionIndex] : null;
+        public float Progress => questions.Count > 0 ? (float)currentQuestionIndex / Mathf.Min(questions.Count, maxQuestions) : 0f;
 
         public event Action<QuestionData> OnQuestionChanged;
         public event Action<FeedbackData> OnFeedbackReady;
         public event Action<InterviewReportData> OnInterviewCompleted;
+        public event Action<string> OnError;
 
         private void Start()
         {
@@ -33,15 +36,21 @@ namespace InterviewVR
 
         public void SubmitAnswer(string transcript)
         {
-            if (!IsReady || string.IsNullOrWhiteSpace(transcript))
+            if (!IsReady || IsProcessing)
             {
-                Debug.LogWarning("Cannot submit a blank transcript.");
+                Debug.LogWarning("Controller is not ready or is currently processing.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(transcript))
+            {
+                OnError?.Invoke("Cannot submit a blank transcript.");
                 return;
             }
 
             if (CurrentQuestion == null)
             {
-                Debug.LogWarning("No current question is available.");
+                OnError?.Invoke("No current question is available.");
                 return;
             }
 
@@ -52,11 +61,13 @@ namespace InterviewVR
         {
             currentQuestionIndex = 0;
             scores.Clear();
+            IsProcessing = false;
             StartCoroutine(LoadQuestions());
         }
 
         private IEnumerator LoadQuestions()
         {
+            IsProcessing = true;
             string url = $"{apiBaseUrl}/api/interview/questions?role={role}&interview_type={interview_type}";
             using (UnityWebRequest request = UnityWebRequest.Get(url))
             {
@@ -64,18 +75,24 @@ namespace InterviewVR
 
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    Debug.LogError($"Failed to load questions: {request.error}");
+                    string error = $"Failed to load questions: {request.error}";
+                    OnError?.Invoke(error);
+                    Debug.LogError(error);
                     IsReady = false;
+                    IsProcessing = false;
                     yield break;
                 }
 
                 var response = JsonUtility.FromJson<QuestionsResponse>($"{{\"items\":{request.downloadHandler.text}}}");
                 questions.Clear();
 
-                if (response == null || response.items == null)
+                if (response == null || response.items == null || response.items.Length == 0)
                 {
-                    Debug.LogError("No questions returned from backend.");
+                    string error = "No questions returned from backend.";
+                    OnError?.Invoke(error);
+                    Debug.LogError(error);
                     IsReady = false;
+                    IsProcessing = false;
                     yield break;
                 }
 
@@ -86,6 +103,7 @@ namespace InterviewVR
 
                 currentQuestionIndex = 0;
                 IsReady = true;
+                IsProcessing = false;
                 Debug.Log($"Loaded {questions.Count} questions.");
                 OnQuestionChanged?.Invoke(CurrentQuestion);
             }
@@ -93,6 +111,7 @@ namespace InterviewVR
 
         private IEnumerator EvaluateCurrentAnswer(string transcript)
         {
+            IsProcessing = true;
             var question = CurrentQuestion;
             var payload = new EvaluateRequest
             {
@@ -114,7 +133,10 @@ namespace InterviewVR
 
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    Debug.LogError($"Evaluation failed: {request.error}");
+                    string error = $"Evaluation failed: {request.error}";
+                    OnError?.Invoke(error);
+                    Debug.LogError(error);
+                    IsProcessing = false;
                     yield break;
                 }
 
@@ -133,6 +155,7 @@ namespace InterviewVR
                     yield break;
                 }
 
+                IsProcessing = false;
                 OnQuestionChanged?.Invoke(CurrentQuestion);
             }
         }
@@ -158,7 +181,10 @@ namespace InterviewVR
 
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    Debug.LogError($"Report generation failed: {request.error}");
+                    string error = $"Report generation failed: {request.error}";
+                    OnError?.Invoke(error);
+                    Debug.LogError(error);
+                    IsProcessing = false;
                     yield break;
                 }
 
@@ -166,6 +192,7 @@ namespace InterviewVR
                 OnInterviewCompleted?.Invoke(report);
                 Debug.Log($"Interview report average: {report.average_score}");
                 Debug.Log(report.summary);
+                IsProcessing = false;
             }
         }
 
