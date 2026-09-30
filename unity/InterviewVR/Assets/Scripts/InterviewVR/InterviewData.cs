@@ -9,7 +9,7 @@ namespace InterviewVR
     {
         public string id;
         public string role;
-        public string interviewType;
+        public string interview_type;
         public string prompt;
     }
 
@@ -17,17 +17,28 @@ namespace InterviewVR
     public class FeedbackData
     {
         public int score;
-        public List<string> strengths = new List<string>();
-        public List<string> improvements = new List<string>();
-        public List<string> missingInformation = new List<string>();
-        public string followUpQuestion;
+        public string[] strengths;
+        public string[] improvements;
+        public string[] missing_information;
+        public string follow_up_question;
+    }
+
+    [Serializable]
+    public class InterviewReportData
+    {
+        public string role;
+        public string interview_type;
+        public int total_questions;
+        public float average_score;
+        public string summary;
+        public string[] recommendations;
     }
 
     [Serializable]
     public class InterviewState
     {
         public string role;
-        public string interviewType;
+        public string interview_type;
         public int currentQuestionIndex;
         public List<QuestionData> questions = new List<QuestionData>();
         public string transcript;

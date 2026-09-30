@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+import json
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.models import QUESTION_BANK
@@ -34,12 +34,9 @@ def get_questions(role: str, interview_type: str) -> list[QuestionResponse]:
     selected_type = interview_type.lower()
 
     if selected_role not in QUESTION_BANK:
-        raise HTTPException(status_code=400, detail=f"Unsupported role: {role}")
+        return []
     if selected_type not in QUESTION_BANK[selected_role]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported interview type '{interview_type}' for role '{role}'",
-        )
+        return []
 
     return [
         QuestionResponse(
@@ -65,15 +62,10 @@ def evaluate_transcript(payload: EvaluateRequest) -> EvaluateResponse:
 
 
 @app.post("/api/interview/report", response_model=InterviewReportResponse)
-def generate_report(payload: dict[str, Any]) -> InterviewReportResponse:
+def generate_report(payload: dict) -> InterviewReportResponse:
     role = payload.get("role", "software_engineer")
     interview_type = payload.get("interview_type", "behavioral")
     scores = payload.get("scores") or [80]
-
-    if not isinstance(scores, list):
-        raise HTTPException(status_code=400, detail="'scores' must be a list of numbers.")
-    if not scores:
-        raise HTTPException(status_code=400, detail="'scores' cannot be empty.")
 
     report = ReportService.generate_report(
         role=str(role),
@@ -93,6 +85,6 @@ def generate_report(payload: dict[str, Any]) -> InterviewReportResponse:
 
 
 @app.post("/api/interview/transcribe")
-def transcribe_stub(payload: dict[str, Any]) -> dict[str, str]:
+def transcribe_stub(payload: dict) -> dict:
     text = payload.get("text") or payload.get("transcript") or "Simulated transcript generated for this MVP."
     return {"transcript": str(text)}

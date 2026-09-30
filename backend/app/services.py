@@ -1,29 +1,22 @@
 from __future__ import annotations
 
-import os
-from typing import Optional
+from typing import Any
 
-from app.models import Feedback, Question, Role, InterviewType
-from app.schemas import EvaluateRequest, EvaluateResponse
-
-# Placeholder for AI service integration
-# Later can be swapped for OpenAI or another provider
+from app.models import Feedback, InterviewType, Role
 
 
 class InterviewEvaluationService:
     """Evaluates interview answers using a simple heuristic model.
-    
-    In production, this would call an LLM like OpenAI GPT-4.
-    For MVP, we use rule-based evaluation based on transcript length and keywords.
+
+    For the MVP this is intentionally lightweight and deterministic so the product can be
+    developed and tested on a Windows PC without external dependencies.
     """
 
     @staticmethod
-    def evaluate(payload: EvaluateRequest) -> Feedback:
-        transcript = payload.transcript.strip()
+    def evaluate(payload: Any) -> Feedback:
+        transcript = (getattr(payload, "transcript", "") or "").strip()
         word_count = len(transcript.split())
-        question_id = payload.question_id
 
-        # Simple heuristic evaluation based on answer length and structure
         if word_count < 20:
             score = 45
             strengths = ["The answer was clear and directly addressed the question."]
@@ -80,22 +73,15 @@ class InterviewEvaluationService:
 
 
 class TranscriptService:
-    """Handles speech-to-text transcription.
-    
-    For MVP, this is a stub. Later can integrate with:
-    - OpenAI Whisper API
-    - Google Cloud Speech-to-Text
-    - Azure Speech Services
-    """
+    """Speech-to-text stub for the MVP."""
 
     @staticmethod
     def transcribe(audio_data: bytes) -> str:
-        """Placeholder for transcription logic."""
         return "This is a simulated transcript."
 
 
 class ReportService:
-    """Generates final interview report from scores and feedback."""
+    """Generate a final interview report from scores."""
 
     @staticmethod
     def generate_report(
@@ -103,20 +89,18 @@ class ReportService:
         interview_type: InterviewType,
         scores: list[int],
         feedbacks: list[Feedback],
-    ) -> dict:
+    ) -> dict[str, Any]:
         average_score = sum(scores) / len(scores) if scores else 0
 
-        # Build recommendations based on patterns
-        improvement_themes = {}
+        improvement_themes: dict[str, int] = {}
         for feedback in feedbacks:
             for improvement in feedback.improvements:
                 improvement_themes[improvement] = improvement_themes.get(improvement, 0) + 1
 
-        # Top recurring improvements
-        top_improvements = sorted(
-            improvement_themes.items(), key=lambda x: x[1], reverse=True
-        )[:3]
-        recommendations = [item[0] for item in top_improvements]
+        recommendations = sorted(
+            improvement_themes.items(), key=lambda item: item[1], reverse=True
+        )
+        recommendations = [item[0] for item in recommendations[:3]]
 
         if not recommendations:
             recommendations = [
@@ -127,9 +111,9 @@ class ReportService:
 
         summary = f"You completed a {interview_type} interview for {role.replace('_', ' ')}. "
         if average_score >= 85:
-            summary += "You demonstrated strong technical knowledge and clear communication."
+            summary += "You demonstrated strong expertise and clear communication."
         elif average_score >= 70:
-            summary += "You showed solid understanding with room to strengthen specific areas."
+            summary += "You showed solid understanding with room to strengthen a few specific areas."
         else:
             summary += "Focus on adding more concrete examples and measurable outcomes."
 

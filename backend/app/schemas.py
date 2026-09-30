@@ -18,7 +18,7 @@ class QuestionResponse(BaseModel):
 class EvaluateRequest(BaseModel):
     role: Role
     interview_type: InterviewType
-    question_id: str
+    question_id: str = Field(..., min_length=1)
     transcript: str = Field(..., min_length=1)
 
 

@@ -1,19 +1,30 @@
-# InterviewVR Unity project
+# InterviewVR AI MVP
 
-This folder is the start of the Unity client for InterviewVR AI.
+This folder contains the Unity client for the InterviewVR AI MVP. It is designed to run on a Windows PC and uses simulated keyboard input in the Unity Editor so Quest hardware is not required in the first phase.
 
 ## Included scripts
 
-- `InterviewController.cs` — loads questions from the Python backend and evaluates answers
-- `KeyboardInputController.cs` — simulates a spoken answer in the editor using keyboard input
-- `InterviewData.cs` — shared interview data model
+- `InterviewData.cs` — shared data model for questions, feedback, and reports
+- `InterviewController.cs` — loads questions, submits answers, evaluates them, and ends with a final report
+- `KeyboardInputController.cs` — simulates verbal responses using keyboard input for editor testing
 
-## Open in Unity
+## Running the app
 
-Open this folder as a Unity project and create a scene containing:
+1. Open `unity/InterviewVR` as a Unity project.
+2. Create a scene with an empty GameObject called `InterviewManager`.
+3. Attach `InterviewController` and `KeyboardInputController` to it.
+4. Start the Python API from `backend`.
+5. Press Play in Unity and use the Space key to simulate an answer.
+6. Use R to reset the interview.
 
-- an empty GameObject called `InterviewManager`
-- `InterviewController` attached to it
-- `KeyboardInputController` attached to the same object
+## Backend startup
 
-This gives a fast Windows-first workflow without requiring Meta Quest hardware.
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+This keeps the product small and reliable while matching the requested Windows-first architecture.
