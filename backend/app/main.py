@@ -57,6 +57,16 @@ def get_questions(role: str, interview_type: str) -> list[QuestionResponse]:
 
 @app.post("/api/interview/evaluate", response_model=EvaluateResponse)
 def evaluate_transcript(payload: EvaluateRequest) -> EvaluateResponse:
+    """Evaluate an interview answer.
+    
+    For production, add signature verification:
+        from app.auth import verify_quest_signature
+        
+        def evaluate_transcript(
+            payload: EvaluateRequest,
+            verified: bool = Depends(verify_quest_signature)
+        )
+    """
     feedback = InterviewEvaluationService.evaluate(payload)
     return EvaluateResponse(
         score=feedback.score,

@@ -1,76 +1,75 @@
-# Complete API Keys & Security Guide
+# Deployment Guides
 
-For the full setup details including:
-- Where to get API keys
-- How to securely store them
-- Best practices
-- Production deployment
+## Quest Store Strategy
 
-See: `docs/API_KEYS_AND_SECURITY.md`
+For deploying InterviewVR AI to the public Meta Quest Store and beyond, see:
 
-## Quick Start
+**`docs/QUEST_STORE_DEPLOYMENT.md`** — Complete guide covering:
+- Why you can't bundle API keys in the APK
+- Backend-as-a-Service (BaaS) architecture
+- Three implementation tiers (MVP → Secured → Monetized)
+- Deployment platforms (Heroku, AWS Lambda, DigitalOcean)
+- Cost estimation
+- Security checklist
 
-### 1. Get OpenAI API Key
+## Quick Reference: Backend Deployment
 
-1. Go to https://platform.openai.com/account/api-keys
-2. Create a new API key
-3. Copy it (you'll only see it once)
-
-### 2. Create backend/.env
-
+### Heroku (Easiest for MVP)
 ```bash
-cp backend/.env.example backend/.env
+heroku create interviewvr-api
+heroku config:set OPENAI_API_KEY=sk-...
+heroku config:set APP_ENV=production
+git push heroku main
 ```
 
-Edit `backend/.env` and add:
-
-```
-OPENAI_API_KEY=sk-your-key-here
-OPENAI_MODEL=gpt-4o-mini
-WHISPER_MODEL=whisper-1
-APP_ENV=development
+### AWS Lambda
+```bash
+sam build
+sam deploy --guided
 ```
 
-### 3. Install dependencies
+### DigitalOcean App Platform
+1. Push code to GitHub
+2. Connect repo in dashboard
+3. Set environment variables
+4. Deploy
+
+## API Security
+
+For production Quest Store release, use HMAC signature verification:
+
+```csharp
+// Unity/Quest side
+var client = new SecureAPIClient("https://api.yourserver.com", appSecret);
+client.SendSignedRequest("/api/interview/evaluate", "POST", json, 
+    onSuccess: (response) => Debug.Log(response),
+    onError: (error) => Debug.LogError(error)
+);
+```
+
+```python
+# Backend side
+from app.auth import verify_quest_signature
+from fastapi import Depends
+
+@app.post("/api/interview/evaluate")
+def evaluate_transcript(
+    payload: EvaluateRequest,
+    verified: bool = Depends(verify_quest_signature)
+) -> EvaluateResponse:
+    # Only reached if signature is valid
+    ...
+```
+
+## Local Testing
 
 ```bash
 cd backend
-python -m venv .venv
-.venv\Scripts\activate
 pip install -r requirements.txt
+uvicorn app.main:app --reload
 ```
 
-### 4. Start the API
-
-```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### 5. Test it
-
+Test health endpoint:
 ```bash
 curl http://localhost:8000/health
 ```
-
-## What's New
-
-✅ **OpenAI Integration:**
-- GPT-4o-mini for intelligent answer evaluation
-- Whisper API for speech-to-text (not yet wired to Unity)
-
-✅ **Unity UI Layer:**
-- `InterviewUIManager.cs` — main flow controller
-- `FeedbackPanel.cs` — shows score and feedback after each answer
-- `ReportPanel.cs` — displays final report
-
-✅ **Secure Configuration:**
-- `app/config.py` loads from `.env` file
-- Environment-based settings
-- Never commits secrets to GitHub
-
-## Next Steps
-
-1. **Get OpenAI key** and set up `.env`
-2. **Build Unity UI scene** with the new UI components
-3. **Add microphone recording** to Unity (currently uses keyboard simulation)
-4. **Test evaluation** by running the backend and hitting the API with sample answers
