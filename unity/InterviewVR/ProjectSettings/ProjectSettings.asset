@@ -1,0 +1,15 @@
+%YAML 1.1
+%TAG ! tag:yaml.org,2002:tag:
+--- !u!129 &1
+PlayerSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 22
+  productName: InterviewVR
+  productionCompanyName: InterviewVR
+  defaultIcon: {fileID: 0}
+  m_BuildTargets: []
+  customRenderingSettings: {}
+  platformSpecificRenderingSettings: []
+  virtualRealitySupported: 1
+  xrSettings:
+    renderingPath: 1
