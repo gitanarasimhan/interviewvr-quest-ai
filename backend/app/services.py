@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from openai import OpenAI, APIError
@@ -79,10 +80,34 @@ class TranscriptService:
     """
 
     @staticmethod
-    def transcribe_file(file_path: str) -> str:
-        """Transcribe an audio file using Whisper."""
+    def _resolve_safe_path(file_path: str) -> Path | None:
+        """Resolve `file_path` and ensure it stays within the configured
+        audio upload directory, rejecting any path traversal attempts
+        (e.g. "../../etc/passwd") before the file is ever opened.
+        """
+        upload_dir = Path(settings.audio_upload_dir).resolve()
+        candidate = (upload_dir / file_path).resolve()
+
         try:
-            with open(file_path, "rb") as audio_file:
+            candidate.relative_to(upload_dir)
+        except ValueError:
+            return None
+        return candidate
+
+    @staticmethod
+    def transcribe_file(file_path: str) -> str:
+        """Transcribe an audio file using Whisper.
+
+        `file_path` is treated as relative to `settings.audio_upload_dir`
+        and validated to prevent path traversal outside of it.
+        """
+        safe_path = TranscriptService._resolve_safe_path(file_path)
+        if safe_path is None:
+            print(f"Rejected audio file path outside upload directory: {file_path}")
+            return "[Invalid file path]"
+
+        try:
+            with open(safe_path, "rb") as audio_file:
                 transcript = client.audio.transcriptions.create(
                     model=settings.whisper_model,
                     file=audio_file,

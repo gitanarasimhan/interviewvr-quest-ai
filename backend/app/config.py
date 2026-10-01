@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     session_max_questions: int = 6
     session_ttl_seconds: int = 3600
 
+    # Directory audio files must live under for /api/interview/transcribe
+    # (prevents path traversal to arbitrary filesystem locations).
+    audio_upload_dir: str = "uploads"
+
     # Rate limiting (requests per minute per IP)
     rate_limit_requests: int = 60
     rate_limit_window: int = 60

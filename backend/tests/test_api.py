@@ -176,6 +176,15 @@ def test_generate_report_legacy_endpoint():
     assert payload["average_score"] == 81.7
 
 
+def test_transcribe_rejects_path_traversal():
+    response = client.post(
+        "/api/interview/transcribe",
+        json={"file_path": "../../etc/passwd"},
+    )
+    assert response.status_code == 200
+    assert response.json()["transcript"] == "[Invalid file path]"
+
+
 def test_hmac_signature_required_when_enabled():
     settings.require_signature = True
     try:

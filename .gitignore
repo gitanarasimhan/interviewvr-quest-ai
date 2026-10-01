@@ -11,6 +11,10 @@ env/
 .env
 .env.*
 
+# Backend runtime artifacts
+backend/uploads/
+backend/api_usage.jsonl
+
 # IDEs
 .vscode/
 .idea/
