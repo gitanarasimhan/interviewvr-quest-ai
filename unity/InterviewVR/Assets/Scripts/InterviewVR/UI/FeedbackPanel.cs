@@ -26,7 +26,7 @@ namespace InterviewVR.UI
             }
         }
 
-        public void DisplayFeedback(FeedbackData feedback)
+        public void DisplayFeedback(ChatResponse feedback)
         {
             if (feedback == null) return;
 
@@ -34,7 +34,9 @@ namespace InterviewVR.UI
             strengthsText.text = $"Strengths:\n{string.Join("\n• ", feedback.strengths)}";
             improvementsText.text = $"Areas to Improve:\n{string.Join("\n• ", feedback.improvements)}";
             missingInfoText.text = $"Missing Information:\n{string.Join("\n• ", feedback.missing_information)}";
-            followUpText.text = $"Follow-up Question:\n{feedback.follow_up_question}";
+            followUpText.text = string.IsNullOrEmpty(feedback.next_question)
+                ? "Follow-up Question:\n(Interview complete)"
+                : $"Follow-up Question:\n{feedback.next_question}";
         }
     }
 }

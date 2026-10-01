@@ -26,7 +26,20 @@ class Settings(BaseSettings):
     app_env: str = "development"
     api_base_url: str = "http://localhost:8000"
     quest_app_secret: str = "local-dev-secret-change-in-production"
-    
+
+    # HMAC request signing
+    require_signature: bool = False
+    signature_max_age_seconds: int = 300
+
+    # Conversation session management
+    session_history_window: int = 6
+    session_max_questions: int = 6
+    session_ttl_seconds: int = 3600
+
+    # Directory audio files must live under for /api/interview/transcribe
+    # (prevents path traversal to arbitrary filesystem locations).
+    audio_upload_dir: str = "uploads"
+
     # Rate limiting (requests per minute per IP)
     rate_limit_requests: int = 60
     rate_limit_window: int = 60

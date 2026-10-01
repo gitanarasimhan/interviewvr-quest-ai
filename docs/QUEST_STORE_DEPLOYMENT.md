@@ -89,71 +89,75 @@ Add authentication so only your Quest app can call your backend:
 
 ```python
 # backend/app/auth.py
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request, Header
 import hmac
 import hashlib
+import time
 
-def verify_quest_request(request_signature: str, request_body: str) -> dict:
+def verify_quest_request(body: str, signature: str, timestamp: str, secret: str, max_age_seconds: int = 300) -> bool:
     """
-    Verify the request came from your Quest app.
-    Uses HMAC signing to prevent spoofing.
+    Verify the request came from your Quest app and was signed recently.
+    HMAC-SHA256 is computed over "{timestamp}.{body}" so the timestamp
+    itself is part of the signed payload, which prevents replay attacks:
+    a captured request/signature pair becomes useless once it expires.
     """
-    app_secret = os.getenv("QUEST_APP_SECRET")
-    expected_signature = hmac.new(
-        app_secret.encode(),
-        request_body.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    
-    if not hmac.compare_digest(request_signature, expected_signature):
+    if abs(time.time() - float(timestamp)) > max_age_seconds:
+        raise HTTPException(status_code=401, detail="Request timestamp is expired or invalid")
+
+    message = f"{timestamp}.{body}"
+    expected_signature = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(signature, expected_signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
-    
-    return {"valid": True}
+
+    return True
 
 # backend/app/main.py
-@app.post("/api/interview/evaluate")
-def evaluate_transcript(
-    payload: EvaluateRequest,
-    signature: str = Header(None)
-) -> EvaluateResponse:
-    verify_quest_request(signature, json.dumps(payload.dict()))
-    feedback = InterviewEvaluationService.evaluate(payload)
-    return feedback
+@app.post("/api/interview/chat", dependencies=[Depends(verify_quest_signature)])
+def chat(payload: ChatRequest) -> ChatResponse:
+    feedback, session = ConversationService.evaluate_answer(payload.session_id, payload.answer)
+    ...
 ```
 
 **Unity/Quest side:**
 
 ```csharp
-// unity/InterviewVR/Assets/Scripts/InterviewVR/Network/SecureAPI.cs
+// unity/InterviewVR/Assets/Scripts/InterviewVR/Network/SecureAPIClient.cs
+using System;
 using System.Security.Cryptography;
 using System.Text;
 
 public class SecureAPIClient
 {
     private string appSecret = "your-app-secret-here";  // Store securely
-    
-    private string GenerateHMAC(string body)
+
+    // Signs "{timestamp}.{body}" to match the backend's RequestSigner.
+    private string GenerateSignature(string body, string timestamp)
     {
+        string message = $"{timestamp}.{body}";
         using (var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(appSecret)))
         {
-            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(body));
-            return System.Convert.ToHexString(hash);
+            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
+            var sb = new StringBuilder();
+            foreach (var b in hash) sb.Append(b.ToString("x2"));
+            return sb.ToString();
         }
     }
-    
-    public IEnumerator EvaluateAnswer(EvaluateRequest request)
+
+    public IEnumerator SendSignedRequest(string apiUrl, string jsonBody)
     {
-        string json = JsonUtility.ToJson(request);
-        string signature = GenerateHMAC(json);
-        
+        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string signature = GenerateSignature(jsonBody, timestamp);
+
         using (UnityWebRequest webRequest = new UnityWebRequest(apiUrl, "POST"))
         {
-            byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
             webRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
             webRequest.downloadHandler = new DownloadHandlerBuffer();
             webRequest.SetRequestHeader("Content-Type", "application/json");
             webRequest.SetRequestHeader("X-Signature", signature);
-            
+            webRequest.SetRequestHeader("X-Timestamp", timestamp);
+
             yield return webRequest.SendWebRequest();
             // Handle response...
         }
@@ -299,16 +303,53 @@ heroku logs --tail
 
 ### For AWS Lambda (More control, auto-scaling)
 
+The backend ships with `backend/lambda_handler.py`, which wraps the FastAPI
+app with [Mangum](https://github.com/jordaneremieff/mangum) so it can run
+unmodified on AWS Lambda behind API Gateway.
+
 ```bash
 # 1. Install SAM CLI
-# 2. Build
+# 2. Build (installs requirements.txt, including mangum)
 sam build
 
 # 3. Deploy (first time interactive)
 sam deploy --guided
 
-# 4. AWS Secrets Manager stores OPENAI_API_KEY
-# 5. Lambda function fetches it at runtime
+# 4. Set the Lambda handler to: lambda_handler.handler
+# 5. AWS Secrets Manager (or Lambda env vars) stores OPENAI_API_KEY and QUEST_APP_SECRET
+# 6. Set REQUIRE_SIGNATURE=true in production so HMAC verification is enforced
+```
+
+Minimal `template.yaml` (SAM) snippet:
+
+```yaml
+Resources:
+  InterviewVRApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: lambda_handler.handler
+      Runtime: python3.12
+      Timeout: 30
+      Environment:
+        Variables:
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          QUEST_APP_SECRET: !Ref QuestAppSecret
+          REQUIRE_SIGNATURE: "true"
+          APP_ENV: production
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+```
+
+You can validate the Lambda handler locally before deploying:
+
+```bash
+cd backend
+python -c "from lambda_handler import handler; print(handler)"
 ```
 
 ### For DigitalOcean App Platform

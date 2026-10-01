@@ -5,19 +5,25 @@ using UnityEngine.UI;
 namespace InterviewVR.UI
 {
     /// <summary>
-    /// Manages the main interview flow UI including question display and feedback.
+    /// Manages the main interview flow UI: wires the <see cref="InterviewController"/>
+    /// conversation events to the chat, feedback, progress, report and error
+    /// sub-controllers.
     /// </summary>
     public class InterviewUIManager : MonoBehaviour
     {
         [SerializeField] private InterviewController interviewController;
         [SerializeField] private Text questionText;
-        [SerializeField] private Text questionCounterText;
         [SerializeField] private Button submitButton;
         [SerializeField] private Button resetButton;
-        [SerializeField] private CanvasGroup feedbackPanel;
-        [SerializeField] private CanvasGroup reportPanel;
         [SerializeField] private CanvasGroup loadingPanel;
+        [SerializeField] private CanvasGroup reportPanel;
         [SerializeField] private Text errorText;
+
+        [Header("Sub-controllers")]
+        [SerializeField] private ChatUIController chatUIController;
+        [SerializeField] private FeedbackDisplayController feedbackDisplayController;
+        [SerializeField] private InterviewProgressController progressController;
+        [SerializeField] private ReportPanel reportPanelController;
 
         private void Start()
         {
@@ -28,86 +34,132 @@ namespace InterviewVR.UI
             }
 
             interviewController.OnQuestionChanged += DisplayQuestion;
+            interviewController.OnAnswerSubmitted += DisplayAnswer;
             interviewController.OnFeedbackReady += DisplayFeedback;
             interviewController.OnInterviewCompleted += DisplayReport;
             interviewController.OnError += DisplayError;
 
-            submitButton.onClick.AddListener(() => OnSubmitButtonClicked());
-            resetButton.onClick.AddListener(() => OnResetButtonClicked());
+            if (submitButton != null)
+            {
+                submitButton.onClick.AddListener(OnSubmitButtonClicked);
+            }
+            if (resetButton != null)
+            {
+                resetButton.onClick.AddListener(OnResetButtonClicked);
+            }
 
             HideAllPanels();
             ShowLoadingPanel();
         }
 
-        private void DisplayQuestion(QuestionData question)
+        private void DisplayQuestion(string question)
         {
-            if (question == null)
+            if (string.IsNullOrEmpty(question))
             {
-                Debug.LogWarning("DisplayQuestion: question is null.");
+                Debug.LogWarning("DisplayQuestion: question is empty.");
                 return;
             }
 
             HideAllPanels();
-            questionText.text = question.prompt;
-            int totalQuestions = Mathf.Min(5, 5); // Simplified for MVP
-            int currentQuestion = interviewController.CurrentQuestion != null ? 1 : 0;
-            questionCounterText.text = $"Question {currentQuestion} of {totalQuestions}";
 
-            submitButton.interactable = true;
+            if (questionText != null)
+            {
+                questionText.text = question;
+            }
+
+            chatUIController?.AddQuestionBubble(question);
+            progressController?.SetProgress(interviewController.Progress);
+
+            if (submitButton != null)
+            {
+                submitButton.interactable = true;
+            }
         }
 
-        private void DisplayFeedback(FeedbackData feedback)
+        private void DisplayAnswer(string answer)
         {
-            HideAllPanels();
-            feedbackPanel.alpha = 1;
-            feedbackPanel.interactable = true;
-            // Populate feedback UI here (score, strengths, improvements, etc.)
-            Debug.Log($"Feedback: Score={feedback.score}, Follow-up={feedback.follow_up_question}");
+            chatUIController?.AddAnswerBubble(answer);
         }
 
-        private void DisplayReport(InterviewReportData report)
+        private void DisplayFeedback(ChatResponse feedback)
         {
             HideAllPanels();
-            reportPanel.alpha = 1;
-            reportPanel.interactable = true;
-            // Populate report UI here (average score, summary, recommendations)
+
+            chatUIController?.AddFeedbackBubble(feedback);
+            feedbackDisplayController?.DisplayFeedback(feedback);
+            progressController?.SetProgress(feedback.progress);
+
+            Debug.Log($"Feedback: Score={feedback.score}, Next question={feedback.next_question}");
+        }
+
+        private void DisplayReport(EndInterviewResponse report)
+        {
+            HideAllPanels();
+
+            if (reportPanel != null)
+            {
+                reportPanel.alpha = 1;
+                reportPanel.interactable = true;
+            }
+
+            reportPanelController?.DisplayReport(report);
+            progressController?.SetProgress(1f);
+
             Debug.Log($"Report: Average Score={report.average_score}, Summary={report.summary}");
         }
 
         private void DisplayError(string message)
         {
             HideAllPanels();
-            errorText.text = $"Error: {message}";
-            errorText.gameObject.SetActive(true);
+            if (errorText != null)
+            {
+                errorText.text = $"Error: {message}";
+                errorText.gameObject.SetActive(true);
+            }
+            Debug.LogError($"InterviewUIManager error: {message}");
         }
 
         private void OnSubmitButtonClicked()
         {
-            submitButton.interactable = false;
+            if (submitButton != null)
+            {
+                submitButton.interactable = false;
+            }
             // In a real app, this would capture microphone input.
             // For now, simulated input via KeyboardInputController.
         }
 
         private void OnResetButtonClicked()
         {
+            chatUIController?.Clear();
             interviewController.ResetInterview();
         }
 
         private void HideAllPanels()
         {
-            feedbackPanel.alpha = 0;
-            feedbackPanel.interactable = false;
-            reportPanel.alpha = 0;
-            reportPanel.interactable = false;
-            loadingPanel.alpha = 0;
-            loadingPanel.interactable = false;
-            errorText.gameObject.SetActive(false);
+            if (reportPanel != null)
+            {
+                reportPanel.alpha = 0;
+                reportPanel.interactable = false;
+            }
+            if (loadingPanel != null)
+            {
+                loadingPanel.alpha = 0;
+                loadingPanel.interactable = false;
+            }
+            if (errorText != null)
+            {
+                errorText.gameObject.SetActive(false);
+            }
         }
 
         private void ShowLoadingPanel()
         {
-            loadingPanel.alpha = 1;
-            loadingPanel.interactable = true;
+            if (loadingPanel != null)
+            {
+                loadingPanel.alpha = 1;
+                loadingPanel.interactable = true;
+            }
         }
 
         private void OnDestroy()
@@ -115,6 +167,7 @@ namespace InterviewVR.UI
             if (interviewController != null)
             {
                 interviewController.OnQuestionChanged -= DisplayQuestion;
+                interviewController.OnAnswerSubmitted -= DisplayAnswer;
                 interviewController.OnFeedbackReady -= DisplayFeedback;
                 interviewController.OnInterviewCompleted -= DisplayReport;
                 interviewController.OnError -= DisplayError;
