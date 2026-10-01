@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from pathlib import Path
 from typing import Any
 
 from openai import OpenAI, APIError
@@ -84,38 +83,29 @@ class TranscriptService:
     """
 
     @staticmethod
-    def _resolve_safe_path(file_path: str) -> Path | None:
-        """Validate `file_path` is a plain filename (no directory
-        components or traversal sequences) and resolve it under the
-        configured audio upload directory.
-
-        Rejects anything containing path separators, "..", or characters
-        outside of a strict allowlist, so a value like "../../etc/passwd"
-        or an absolute path can never escape `settings.audio_upload_dir`.
-        """
-        filename = os.path.basename(file_path)
-        if not filename or filename != file_path or filename in (".", ".."):
-            return None
-        if not _SAFE_FILENAME_PATTERN.match(filename):
-            return None
-
-        return Path(settings.audio_upload_dir) / filename
-
-    @staticmethod
     def transcribe_file(file_path: str) -> str:
         """Transcribe an audio file using Whisper.
 
-        `file_path` must be a plain filename located directly inside
-        `settings.audio_upload_dir`; any path traversal or directory
-        component is rejected before the file is opened.
+        `file_path` must resolve to a location inside
+        `settings.audio_upload_dir`; the path is normalized and checked
+        against that base directory before the file is opened, so values
+        such as "../../etc/passwd" or an absolute path can never escape
+        the upload directory.
         """
-        safe_path = TranscriptService._resolve_safe_path(file_path)
-        if safe_path is None:
+        if not _SAFE_FILENAME_PATTERN.match(file_path or ""):
+            print(f"Rejected audio file path outside upload directory: {file_path}")
+            return "[Invalid file path]"
+
+        base_path = os.path.realpath(settings.audio_upload_dir)
+        # GOOD -- verify with a normalized version of the path, and
+        # confirm it is still contained within the upload directory.
+        full_path = os.path.normpath(os.path.join(base_path, file_path))
+        if not full_path.startswith(base_path):
             print(f"Rejected audio file path outside upload directory: {file_path}")
             return "[Invalid file path]"
 
         try:
-            with open(safe_path, "rb") as audio_file:
+            with open(full_path, "rb") as audio_file:
                 transcript = client.audio.transcriptions.create(
                     model=settings.whisper_model,
                     file=audio_file,
