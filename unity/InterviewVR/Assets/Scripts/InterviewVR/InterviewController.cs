@@ -6,35 +6,57 @@ using UnityEngine.Networking;
 
 namespace InterviewVR
 {
+    /// <summary>
+    /// Drives the dynamic AI interview conversation flow:
+    ///   1. Start a session (POST /api/interview/start)
+    ///   2. Submit candidate answers and receive AI feedback + follow-up
+    ///      questions (POST /api/interview/chat), repeating until complete
+    ///   3. End the session and display the final report (POST /api/interview/end)
+    /// </summary>
     public class InterviewController : MonoBehaviour
     {
         [Header("Interview Configuration")]
         [SerializeField] private string apiBaseUrl = "http://localhost:8000";
         [SerializeField] private string role = "software_engineer";
         [SerializeField] private string interview_type = "behavioral";
-        [SerializeField] private int maxQuestions = 5;
+
+        [Header("Security")]
+        [Tooltip("Shared secret used to HMAC-sign requests. Must match the backend's QUEST_APP_SECRET.")]
+        [SerializeField] private string appSecret = "";
+        [Tooltip("When true, requests are signed with X-Signature/X-Timestamp headers.")]
+        [SerializeField] private bool useSignedRequests = false;
 
         [Header("Runtime State")]
-        [SerializeField] private List<QuestionData> questions = new List<QuestionData>();
-        [SerializeField] private int currentQuestionIndex;
+        [SerializeField] private string sessionId;
+        [SerializeField] private string currentQuestion;
+        [SerializeField] private float progress;
         [SerializeField] private List<int> scores = new List<int>();
 
         public bool IsReady { get; private set; }
         public bool IsProcessing { get; private set; }
-        public QuestionData CurrentQuestion => currentQuestionIndex < questions.Count ? questions[currentQuestionIndex] : null;
-        public float Progress => questions.Count > 0 ? (float)currentQuestionIndex / Mathf.Min(questions.Count, maxQuestions) : 0f;
+        public string SessionId => sessionId;
+        public string CurrentQuestion => currentQuestion;
+        public float Progress => progress;
 
-        public event Action<QuestionData> OnQuestionChanged;
-        public event Action<FeedbackData> OnFeedbackReady;
-        public event Action<InterviewReportData> OnInterviewCompleted;
+        public event Action<string> OnQuestionChanged;
+        public event Action<string> OnAnswerSubmitted;
+        public event Action<ChatResponse> OnFeedbackReady;
+        public event Action<EndInterviewResponse> OnInterviewCompleted;
         public event Action<string> OnError;
+
+        private Network.SecureAPIClient secureClient;
+
+        private void Awake()
+        {
+            secureClient = new Network.SecureAPIClient(apiBaseUrl, appSecret);
+        }
 
         private void Start()
         {
-            StartCoroutine(LoadQuestions());
+            StartCoroutine(StartInterview());
         }
 
-        public void SubmitAnswer(string transcript)
+        public void SubmitAnswer(string answer)
         {
             if (!IsReady || IsProcessing)
             {
@@ -42,87 +64,161 @@ namespace InterviewVR
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(transcript))
+            if (string.IsNullOrWhiteSpace(answer))
             {
-                OnError?.Invoke("Cannot submit a blank transcript.");
+                OnError?.Invoke("Cannot submit a blank answer.");
                 return;
             }
 
-            if (CurrentQuestion == null)
+            if (string.IsNullOrEmpty(sessionId))
             {
-                OnError?.Invoke("No current question is available.");
+                OnError?.Invoke("No active interview session.");
                 return;
             }
 
-            StartCoroutine(EvaluateCurrentAnswer(transcript));
+            OnAnswerSubmitted?.Invoke(answer);
+            StartCoroutine(SendAnswer(answer));
         }
 
         public void ResetInterview()
         {
-            currentQuestionIndex = 0;
+            sessionId = null;
+            currentQuestion = null;
+            progress = 0f;
             scores.Clear();
+            IsReady = false;
             IsProcessing = false;
-            StartCoroutine(LoadQuestions());
+            StartCoroutine(StartInterview());
         }
 
-        private IEnumerator LoadQuestions()
+        private IEnumerator StartInterview()
         {
+            IsReady = false;
             IsProcessing = true;
-            string url = $"{apiBaseUrl}/api/interview/questions?role={role}&interview_type={interview_type}";
-            using (UnityWebRequest request = UnityWebRequest.Get(url))
-            {
-                yield return request.SendWebRequest();
 
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    string error = $"Failed to load questions: {request.error}";
-                    OnError?.Invoke(error);
-                    Debug.LogError(error);
-                    IsReady = false;
-                    IsProcessing = false;
-                    yield break;
-                }
-
-                var response = JsonUtility.FromJson<QuestionsResponse>($"{{\"items\":{request.downloadHandler.text}}}");
-                questions.Clear();
-
-                if (response == null || response.items == null || response.items.Length == 0)
-                {
-                    string error = "No questions returned from backend.";
-                    OnError?.Invoke(error);
-                    Debug.LogError(error);
-                    IsReady = false;
-                    IsProcessing = false;
-                    yield break;
-                }
-
-                foreach (var item in response.items)
-                {
-                    questions.Add(item);
-                }
-
-                currentQuestionIndex = 0;
-                IsReady = true;
-                IsProcessing = false;
-                Debug.Log($"Loaded {questions.Count} questions.");
-                OnQuestionChanged?.Invoke(CurrentQuestion);
-            }
-        }
-
-        private IEnumerator EvaluateCurrentAnswer(string transcript)
-        {
-            IsProcessing = true;
-            var question = CurrentQuestion;
-            var payload = new EvaluateRequest
-            {
-                role = role,
-                interview_type = interview_type,
-                question_id = question.id,
-                transcript = transcript
-            };
-
+            var payload = new StartInterviewRequest { role = role, interview_type = interview_type };
             string json = JsonUtility.ToJson(payload);
-            using (UnityWebRequest request = new UnityWebRequest($"{apiBaseUrl}/api/interview/evaluate", "POST"))
+
+            yield return SendRequest<StartInterviewResponse>(
+                "/api/interview/start",
+                json,
+                onSuccess: response =>
+                {
+                    sessionId = response.session_id;
+                    currentQuestion = response.question;
+                    progress = response.progress;
+                    IsReady = true;
+                    IsProcessing = false;
+                    Debug.Log($"Interview started. Session: {sessionId}");
+                    OnQuestionChanged?.Invoke(currentQuestion);
+                },
+                onError: error =>
+                {
+                    IsReady = false;
+                    IsProcessing = false;
+                    OnError?.Invoke($"Failed to start interview: {error}");
+                });
+        }
+
+        private IEnumerator SendAnswer(string answer)
+        {
+            IsProcessing = true;
+
+            var payload = new ChatRequest { session_id = sessionId, answer = answer };
+            string json = JsonUtility.ToJson(payload);
+
+            yield return SendRequest<ChatResponse>(
+                "/api/interview/chat",
+                json,
+                onSuccess: response =>
+                {
+                    scores.Add(response.score);
+                    OnFeedbackReady?.Invoke(response);
+                    progress = response.progress;
+
+                    Debug.Log($"Score: {response.score}");
+
+                    if (response.is_complete || string.IsNullOrEmpty(response.next_question))
+                    {
+                        StartCoroutine(EndInterview());
+                        return;
+                    }
+
+                    currentQuestion = response.next_question;
+                    IsProcessing = false;
+                    OnQuestionChanged?.Invoke(currentQuestion);
+                },
+                onError: error =>
+                {
+                    IsProcessing = false;
+                    OnError?.Invoke($"Chat request failed: {error}");
+                });
+        }
+
+        private IEnumerator EndInterview()
+        {
+            var payload = new EndInterviewRequest { session_id = sessionId };
+            string json = JsonUtility.ToJson(payload);
+
+            yield return SendRequest<EndInterviewResponse>(
+                "/api/interview/end",
+                json,
+                onSuccess: report =>
+                {
+                    IsReady = false;
+                    IsProcessing = false;
+                    OnInterviewCompleted?.Invoke(report);
+                    Debug.Log($"Interview report average: {report.average_score}");
+                    Debug.Log(report.summary);
+                },
+                onError: error =>
+                {
+                    IsProcessing = false;
+                    OnError?.Invoke($"Failed to generate report: {error}");
+                });
+        }
+
+        /// <summary>
+        /// Sends a JSON POST request, optionally HMAC-signed, and parses the
+        /// JSON response into <typeparamref name="T"/>.
+        /// </summary>
+        private IEnumerator SendRequest<T>(string endpoint, string json, Action<T> onSuccess, Action<string> onError)
+        {
+            if (useSignedRequests && !string.IsNullOrEmpty(appSecret))
+            {
+                bool completed = false;
+                string resultText = null;
+                string errorText = null;
+
+                secureClient.SendSignedRequest(
+                    endpoint,
+                    "POST",
+                    json,
+                    success =>
+                    {
+                        resultText = success;
+                        completed = true;
+                    },
+                    error =>
+                    {
+                        errorText = error;
+                        completed = true;
+                    });
+
+                yield return new WaitUntil(() => completed);
+
+                if (errorText != null)
+                {
+                    onError?.Invoke(errorText);
+                    yield break;
+                }
+
+                T parsed = JsonUtility.FromJson<T>(resultText);
+                onSuccess?.Invoke(parsed);
+                yield break;
+            }
+
+            using (UnityWebRequest request = new UnityWebRequest($"{apiBaseUrl}{endpoint}", "POST"))
             {
                 byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(json);
                 request.uploadHandler = new UploadHandlerRaw(bodyRaw);
@@ -133,90 +229,13 @@ namespace InterviewVR
 
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    string error = $"Evaluation failed: {request.error}";
-                    OnError?.Invoke(error);
-                    Debug.LogError(error);
-                    IsProcessing = false;
+                    onError?.Invoke($"{request.error} ({request.responseCode})");
                     yield break;
                 }
 
-                var feedback = JsonUtility.FromJson<FeedbackData>(request.downloadHandler.text);
-                scores.Add(feedback.score);
-                OnFeedbackReady?.Invoke(feedback);
-
-                Debug.Log($"Score: {feedback.score}");
-                Debug.Log($"Follow-up: {feedback.follow_up_question}");
-
-                currentQuestionIndex++;
-
-                if (currentQuestionIndex >= Mathf.Min(questions.Count, maxQuestions))
-                {
-                    StartCoroutine(GenerateFinalReport());
-                    yield break;
-                }
-
-                IsProcessing = false;
-                OnQuestionChanged?.Invoke(CurrentQuestion);
+                T parsed = JsonUtility.FromJson<T>(request.downloadHandler.text);
+                onSuccess?.Invoke(parsed);
             }
-        }
-
-        private IEnumerator GenerateFinalReport()
-        {
-            var reportPayload = new ReportRequest
-            {
-                role = role,
-                interview_type = interview_type,
-                scores = scores.ToArray()
-            };
-
-            string payloadJson = JsonUtility.ToJson(reportPayload);
-            using (UnityWebRequest request = new UnityWebRequest($"{apiBaseUrl}/api/interview/report", "POST"))
-            {
-                byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(payloadJson);
-                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
-                request.downloadHandler = new DownloadHandlerBuffer();
-                request.SetRequestHeader("Content-Type", "application/json");
-
-                yield return request.SendWebRequest();
-
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    string error = $"Report generation failed: {request.error}";
-                    OnError?.Invoke(error);
-                    Debug.LogError(error);
-                    IsProcessing = false;
-                    yield break;
-                }
-
-                var report = JsonUtility.FromJson<InterviewReportData>(request.downloadHandler.text);
-                OnInterviewCompleted?.Invoke(report);
-                Debug.Log($"Interview report average: {report.average_score}");
-                Debug.Log(report.summary);
-                IsProcessing = false;
-            }
-        }
-
-        [Serializable]
-        private class QuestionsResponse
-        {
-            public QuestionData[] items;
-        }
-
-        [Serializable]
-        private class EvaluateRequest
-        {
-            public string role;
-            public string interview_type;
-            public string question_id;
-            public string transcript;
-        }
-
-        [Serializable]
-        private class ReportRequest
-        {
-            public string role;
-            public string interview_type;
-            public int[] scores;
         }
     }
 }

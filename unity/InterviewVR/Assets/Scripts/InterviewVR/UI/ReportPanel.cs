@@ -24,7 +24,7 @@ namespace InterviewVR.UI
             }
         }
 
-        public void DisplayReport(InterviewReportData report)
+        public void DisplayReport(EndInterviewResponse report)
         {
             if (report == null) return;
 

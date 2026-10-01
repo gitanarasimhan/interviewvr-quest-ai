@@ -1,21 +1,33 @@
 from __future__ import annotations
 
-from typing import Any
+import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import verify_quest_signature
 from app.config import get_settings
-from app.models import QUESTION_BANK
-from app.schemas import EvaluateRequest, EvaluateResponse, InterviewReportResponse, QuestionResponse
+from app.conversation_service import ConversationService
+from app.schemas import (
+    ChatRequest,
+    ChatResponse,
+    EndInterviewRequest,
+    EndInterviewResponse,
+    EvaluateRequest,
+    EvaluateResponse,
+    InterviewReportResponse,
+    StartInterviewRequest,
+    StartInterviewResponse,
+)
 from app.services import InterviewEvaluationService, ReportService, TranscriptService
 
 settings = get_settings()
+logger = logging.getLogger("interviewvr.main")
 
 app = FastAPI(
     title="InterviewVR AI API",
-    version="0.1.0",
-    description="MVP backend for InterviewVR AI interview coaching.",
+    version="0.2.0",
+    description="Dynamic AI-driven interview backend for InterviewVR AI.",
 )
 
 app.add_middleware(
@@ -28,44 +40,117 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Health/startup check endpoint. Safe to use for Lambda warmers and load balancers."""
     return {"status": "ok", "service": "interviewvr-ai-api", "env": settings.app_env}
 
 
-@app.get("/api/interview/questions", response_model=list[QuestionResponse])
-def get_questions(role: str, interview_type: str) -> list[QuestionResponse]:
-    selected_role = role.lower()
-    selected_type = interview_type.lower()
-
-    if selected_role not in QUESTION_BANK:
-        raise HTTPException(status_code=400, detail=f"Unsupported role: {role}")
-    if selected_type not in QUESTION_BANK[selected_role]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported interview type '{interview_type}' for role '{role}'",
-        )
-
-    return [
-        QuestionResponse(
-            id=q.id,
-            role=q.role,
-            interview_type=q.interview_type,
-            prompt=q.prompt,
-        )
-        for q in QUESTION_BANK[selected_role][selected_type]
-    ]
+def _progress(session) -> float:
+    completed_turns = sum(1 for turn in session.turns if turn.answer is not None)
+    return min(completed_turns / settings.session_max_questions, 1.0)
 
 
-@app.post("/api/interview/evaluate", response_model=EvaluateResponse)
+@app.post(
+    "/api/interview/start",
+    response_model=StartInterviewResponse,
+    dependencies=[Depends(verify_quest_signature)],
+)
+def start_interview(payload: StartInterviewRequest) -> StartInterviewResponse:
+    """Initialize a new dynamic AI interview session and return the opening question."""
+    session = ConversationService.start_session(role=payload.role, interview_type=payload.interview_type)
+    question = session.current_turn.question if session.current_turn else ""
+
+    return StartInterviewResponse(
+        session_id=session.id,
+        role=session.role,
+        interview_type=session.interview_type,
+        question=question,
+        progress=_progress(session),
+    )
+
+
+@app.post(
+    "/api/interview/chat",
+    response_model=ChatResponse,
+    dependencies=[Depends(verify_quest_signature)],
+)
+def chat(payload: ChatRequest) -> ChatResponse:
+    """Submit a candidate answer and receive AI feedback plus the next question."""
+    try:
+        feedback, session = ConversationService.evaluate_answer(payload.session_id, payload.answer)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown session_id: {payload.session_id}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    next_question = None
+    if not session.completed and session.current_turn and session.current_turn.answer is None:
+        next_question = session.current_turn.question
+
+    return ChatResponse(
+        session_id=session.id,
+        score=feedback.score,
+        strengths=feedback.strengths,
+        improvements=feedback.improvements,
+        missing_information=feedback.missing_information,
+        next_question=next_question,
+        is_complete=session.completed,
+        progress=_progress(session),
+    )
+
+
+@app.post(
+    "/api/interview/end",
+    response_model=EndInterviewResponse,
+    dependencies=[Depends(verify_quest_signature)],
+)
+def end_interview(payload: EndInterviewRequest) -> EndInterviewResponse:
+    """Finalize an interview session and return the aggregated report."""
+    try:
+        report = ConversationService.end_session(payload.session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown session_id: {payload.session_id}")
+
+    return EndInterviewResponse(
+        session_id=payload.session_id,
+        role=report["role"],
+        interview_type=report["interview_type"],
+        total_questions=report["total_questions"],
+        average_score=float(report["average_score"]),
+        summary=report["summary"],
+        recommendations=report["recommendations"],
+    )
+
+
+@app.post("/api/interview/transcribe", dependencies=[Depends(verify_quest_signature)])
+def transcribe_audio(payload: dict) -> dict[str, str]:
+    """Transcribe audio using OpenAI Whisper.
+
+    Accepts either:
+    - text: Direct text input (for testing)
+    - file_path: Path to audio file on disk
+    """
+    text = payload.get("text")
+    file_path = payload.get("file_path")
+
+    if text:
+        return {"transcript": str(text)}
+    if file_path:
+        transcript = TranscriptService.transcribe_file(file_path)
+        return {"transcript": transcript}
+
+    return {"transcript": ""}
+
+
+@app.post(
+    "/api/interview/evaluate",
+    response_model=EvaluateResponse,
+    dependencies=[Depends(verify_quest_signature)],
+)
 def evaluate_transcript(payload: EvaluateRequest) -> EvaluateResponse:
-    """Evaluate an interview answer.
-    
-    For production, add signature verification:
-        from app.auth import verify_quest_signature
-        
-        def evaluate_transcript(
-            payload: EvaluateRequest,
-            verified: bool = Depends(verify_quest_signature)
-        )
+    """Evaluate a single standalone answer outside of a conversation session.
+
+    Kept for backward compatibility and for integrations that only need a
+    one-off evaluation without the full start/chat/end session lifecycle.
     """
     feedback = InterviewEvaluationService.evaluate(payload)
     return EvaluateResponse(
@@ -77,8 +162,13 @@ def evaluate_transcript(payload: EvaluateRequest) -> EvaluateResponse:
     )
 
 
-@app.post("/api/interview/report", response_model=InterviewReportResponse)
-def generate_report(payload: dict[str, Any]) -> InterviewReportResponse:
+@app.post(
+    "/api/interview/report",
+    response_model=InterviewReportResponse,
+    dependencies=[Depends(verify_quest_signature)],
+)
+def generate_report(payload: dict) -> InterviewReportResponse:
+    """Generate a report from a list of scores outside of a conversation session."""
     role = payload.get("role", "software_engineer")
     interview_type = payload.get("interview_type", "behavioral")
     scores = payload.get("scores") or [80]
@@ -105,21 +195,11 @@ def generate_report(payload: dict[str, Any]) -> InterviewReportResponse:
     )
 
 
-@app.post("/api/interview/transcribe")
-def transcribe_audio(payload: dict[str, Any]) -> dict[str, str]:
-    """Transcribe audio using OpenAI Whisper.
-    
-    Accepts either:
-    - text: Direct text input (for testing)
-    - file_path: Path to audio file on disk
-    """
-    text = payload.get("text")
-    file_path = payload.get("file_path")
+try:
+    # Optional dependency: only required when deploying to AWS Lambda.
+    # See `lambda_handler.py` for the entry point used by the Lambda runtime.
+    from mangum import Mangum
 
-    if text:
-        return {"transcript": str(text)}
-    if file_path:
-        transcript = TranscriptService.transcribe_file(file_path)
-        return {"transcript": transcript}
-
-    return {"transcript": ""}
+    lambda_handler = Mangum(app)
+except ImportError:  # pragma: no cover - mangum is only needed on Lambda
+    lambda_handler = None

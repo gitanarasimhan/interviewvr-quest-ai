@@ -14,6 +14,11 @@ You will need the following API keys to run the full MVP:
 **Get it:** https://portal.azure.com → Cognitive Services → Speech
 **Cost:** Free tier available (5 hours/month)
 
+### 3. QUEST_APP_SECRET (shared secret, not a 3rd-party key)
+**Purpose:** HMAC-signs requests between the Unity/Quest client and the backend to prevent spoofing/replay attacks
+**Get it:** Generate your own random secret, e.g. `openssl rand -hex 32`
+**Cost:** Free — just keep it out of source control and rotate periodically
+
 ---
 
 ## Secure Storage Methods
@@ -26,6 +31,8 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 WHISPER_MODEL=whisper-1
 APP_ENV=development
+QUEST_APP_SECRET=change-me-to-a-long-random-secret
+REQUIRE_SIGNATURE=false
 ```
 
 **Never commit .env to GitHub.** It's already in `.gitignore`.

@@ -5,6 +5,12 @@ using UnityEngine.InputSystem;
 
 namespace InterviewVR
 {
+    /// <summary>
+    /// Simulates candidate speech-to-text input via keyboard, for editor
+    /// testing of the dynamic AI conversation flow without a microphone.
+    /// Space submits the next sample answer to the current AI-generated
+    /// question; R restarts the interview session from scratch.
+    /// </summary>
     public class KeyboardInputController : MonoBehaviour
     {
         [SerializeField] private InterviewController interviewController;

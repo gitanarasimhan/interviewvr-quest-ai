@@ -22,14 +22,17 @@ namespace InterviewVR.Network
         }
 
         /// <summary>
-        /// Generate HMAC-SHA256 signature for request body.
-        /// Must match the backend verification.
+        /// Generate HMAC-SHA256 signature over "{timestamp}.{body}".
+        /// Including the timestamp in the signed message prevents replay
+        /// attacks and must match the backend's `RequestSigner` implementation
+        /// (see `backend/app/auth.py`).
         /// </summary>
-        private string GenerateSignature(string body)
+        private string GenerateSignature(string body, string timestamp)
         {
+            string message = $"{timestamp}.{body}";
             using (var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(appSecret)))
             {
-                byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(body));
+                byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
                 // Convert to hex string (must match Python's hexdigest())
                 StringBuilder sb = new StringBuilder();
                 foreach (byte b in hash)
@@ -47,7 +50,8 @@ namespace InterviewVR.Network
             System.Action<string> onSuccess,
             System.Action<string> onError)
         {
-            string signature = GenerateSignature(jsonBody);
+            string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            string signature = GenerateSignature(jsonBody, timestamp);
             Debug.Log($"[SecureAPIClient] Generated signature: {signature.Substring(0, 8)}...");
 
             string url = $"{apiBaseUrl}{endpoint}";
@@ -59,6 +63,7 @@ namespace InterviewVR.Network
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/json");
                 request.SetRequestHeader("X-Signature", signature);
+                request.SetRequestHeader("X-Timestamp", timestamp);
 
                 // Send asynchronously
                 var asyncOp = request.SendWebRequest();
